@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from numpy.linalg import inv
+import matplotlib.pyplot as plt
 
 def data_extract(fraudster, data=r'./../uscecchini_manip.csv'):
     value = int(fraudster) # 1 if fraudster=True, 0 if fraudster=False
@@ -87,6 +88,24 @@ class Firm:
     def compute_reward(self):
         pass
 
+    def fraud_distr_shift(self, step, diff = 10, features=['at', 'cogs', 'lt', 'ni', 'ch_roa', 'ebit', 'ch_fcf']):
+        # divide the difference into 10 steps, and then compute the current step
+        df_gen = data_extract(False)[features]
+        df_frd = data_extract(True)[features]
+        fstd = df_frd.std()
+        diff = (df_gen.mean() - df_frd.mean()) / diff
+        new_frd = df_frd.mean() + diff * step
+        df = pd.concat([new_frd, fstd], axis=1)
+
+        # draw from new feature distribution; column 0 : mean / column 1 : stddev
+        self.at = df[1]['at']*np.random.randn() + df[0]['at']
+        self.cogs = df[1]['cogs'] * np.random.randn() + df[0]['cogs']
+        self.lt = df[1]['lt'] * np.random.randn() + df[0]['lt']
+        self.ni = df[1]['ni'] * np.random.randn() + df[0]['ni']
+        self.ch_roa = df[1]['ch_roa'] * np.random.randn() + df[0]['ch_roa']
+        self.ebit = df[1]['ebit'] * np.random.randn() + df[0]['ebit']
+        self.ch_fcf = df[1]['ch_fcf'] * np.random.randn() + df[0]['ch_fcf']
+
     def __repr__(self):
         return f"Firm active status {self.active}, Fraudster {self.fraudster}, firm features {self.at, self.cogs, self.lt, self.ni, self.ch_roa, self.ebit, self.ch_fcf}"
 
@@ -122,36 +141,94 @@ class SEC:
         return (self.S)
 
     def update_theta(self, x, Y, t):
-        # print(x[self.S, :].shape, Y.shape)
-        self.A += np.matmul(x.T, x)
-        self.b += np.matmul(x.T, Y)
+        # X: 12*7 / Y 12*1 / self.A 7*7, self.b 7*1 /
+        # idx = np.array(self.S)
+        # print(x[idx], x[idx].shape)
+        self.A += np.matmul(x[self.S, :].T, x[self.S, :])
+        self.b += np.matmul(x[self.S, :].T, Y[self.S])
         self.theta = inv(self.A) @ self.b
 
 
 
 if __name__ == '__main__':
-    firms = [Firm(0, False) for _ in range(10)] + [Firm(0, True) for _ in range(2)]
-    caught_firms = []
-    T = 200
+    firms = [Firm(0, False) for _ in range(100)] + [Firm(0, True) for _ in range(2)]
+    print(len(firms))
+    T = 100000
+    distr_shift_num = 10
+    distr_shift_step = T / distr_shift_num #every 40 steps we change the distribution of fraudster
     seed = 123
     sec = SEC(len(firms))
     env = Env(len(firms), sec.K, sec.d, seed=seed)
+    # firm_size = []
+    caught_counts_array = []
+    caught_firm_features = []
+
     for t in range(1, T):
+        inspected_firms = []
         sec.timestep = t
+        print(sec.timestep)
         catch_pool, X, Y = env.create_pool(firms)
-        print(X.shape, Y.shape)
+        print(len(catch_pool))
+        print(Y)
         sec.N = len(catch_pool)
-        caught_firm_index = sec.catch_Sfirms(X)
-        caught_firms.append(caught_firm_index)
-        print(f"caught firms at time {t} is {caught_firms}")
+        inspected_firm_index = sec.catch_Sfirms(X)
+        inspected_firms.append(inspected_firm_index)
+        print(f"Inspected firms at time {t} is {inspected_firms}")
         sec.update_theta(X, Y, t)
         print(f"updated theta is {sec.theta}")
-        for i in caught_firm_index:
-            p = firms[i]
-            p.active=False
-            p.caught=True
-            p.update_active()
-            print(f"index {i} firm has been updated to false")
+        caught_count = 0
+        for i in inspected_firm_index:
+            if Y[i] == 1:
+                caught_count += 1
+                p = firms[i]
+                caught_firm_features.append([p.at, p.cogs, p.lt, p.ni, p.ch_roa, p.ebit, p.ch_fcf])
+                p.active=False
+                p.caught=True
+                p.update_active()
+                print("Firm is caught and status changed to :", p, p.active, p.caught)
 
-        catch_pool.extend([Firm(t, True) for _ in range(len(caught_firm_index))])
-        print("length of catch pool:", len(catch_pool))
+        new_fraudsters = [Firm(t, True) for _ in range(caught_count)]
+        step = t / distr_shift_step
+        if step >= 1 and new_fraudsters:
+            print(new_fraudsters)
+            for f in new_fraudsters:
+                f.fraud_distr_shift(step=step)
+            f = new_fraudsters[0]
+            print("new fraudster features\n", f.at, f.cogs, f.lt, f.ni, f.ch_roa, f.ebit, f.ch_fcf)
+        catch_pool.extend(new_fraudsters)
+        firms = catch_pool
+        # print("length of catch pool:", len(firms))
+        # firm_size.append(len(firms))
+        caught_counts_array.append(caught_count)
+        print(f"history of counts of caught fraudsters' at {sec.timestep} is {caught_counts_array}")
+
+    #plot firm sizes
+
+    plt.plot(np.arange(T-1), np.array(caught_counts_array))
+    plt.ylabel("Firm Sizes")
+    plt.xlabel("Time(t)")
+    plt.title("Firm Size Growth, more means firms caught every timestep")
+    plt.show()
+
+
+    df = data_extract(True)
+    a, b, c, d, e, f, g  = df['at'].mean(), \
+                       df['cogs'].mean(), \
+                       df['lt'].mean(), \
+                       df['ni'].mean(), \
+                       df['ch_roa'].mean(), \
+                       df['ebit'].mean(), \
+                       df['ch_fcf'].mean()
+    print(a, b, c, d, e, f, g)
+    map = {1: ['at', a], 2: ['cogs', b], 3: ['lt', c], 4: ['ni', d], 5: ['ch_roa', e], 6: ['ebit', f], 7: ['ch_fcf', g]}
+
+    for n in range(7):
+        print(caught_firm_features)
+        # x = np.linspace(0, len(caught_firm_features))
+        avg = map[n+1][1]
+        plt.plot(np.array([i[n] for i in caught_firm_features]))
+        plt.plot(avg, 'go--', linestyle='dashed')
+        plt.ylabel(f"{map[n+1]} of caught-firms")
+        plt.xlabel("Timestep (t)")
+        plt.title(f"{map[n+1][0]} trend of caught-firm, and fraudster average (distribution drawn from)")
+        plt.show()
