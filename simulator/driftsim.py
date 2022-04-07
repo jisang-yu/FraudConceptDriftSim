@@ -180,10 +180,8 @@ if __name__ == '__main__':
                 remove_firm_index = S[k]
                 remove_firm = pool[remove_firm_index]
                 if remove_firm.fraudster:
-                    pool.remove(pool[remove_firm_index])
-                    to_insert = np.random.choice([i for i in range(len(pool))]).tolist()
-                    print(to_insert)
-                    pool.insert(to_insert, Firm(t, True))
+                    pool.remove(remove_firm)
+                    pool.append(Firm(t, True))
 
     cumulated_regret = np.cumsum(optRWD) - np.cumsum(RWDS)
     plt.plot(np.arange(T), np.array(cumulated_regret))
